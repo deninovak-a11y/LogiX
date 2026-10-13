@@ -308,6 +308,12 @@ th {
   margin-bottom: 16px;
 }
 
+.inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 @media (max-width: 980px) {
   .content-grid,
   .map-grid,

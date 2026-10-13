@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { MapContainer, Marker, Popup, TileLayer } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
 
 const api = axios.create({
   baseURL: 'http://localhost:4000/api'
 });
 
 const defaultForm = {
+  customer_id: '',
   title: '',
   order_date: new Date().toISOString().slice(0, 10),
   pickup_address: '',
@@ -20,9 +22,17 @@ const defaultForm = {
   priority: 'normal'
 };
 
+const defaultCustomerForm = {
+  name: '',
+  contact_person: '',
+  phone: '',
+  email: ''
+};
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('logixToken') || '');
   const [user, setUser] = useState(null);
+  const [customers, setCustomers] = useState([]);
   const [orders, setOrders] = useState([]);
   const [drivers, setDrivers] = useState([]);
   const [vehicles, setVehicles] = useState([]);
@@ -30,6 +40,7 @@ function App() {
   const [dashboard, setDashboard] = useState(null);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
   const [orderForm, setOrderForm] = useState(defaultForm);
+  const [customerForm, setCustomerForm] = useState(defaultCustomerForm);
   const [loginForm, setLoginForm] = useState({ email: 'admin@logix.local', password: 'admin123' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -48,8 +59,9 @@ function App() {
 
   async function loadAllData() {
     try {
-      const [userRes, ordersRes, driversRes, vehicleRes, toursRes, dashboardRes] = await Promise.all([
+      const [userRes, customersRes, ordersRes, driversRes, vehicleRes, toursRes, dashboardRes] = await Promise.all([
         api.get('/auth/me'),
+        api.get('/customers'),
         api.get('/orders'),
         api.get('/drivers'),
         api.get('/vehicles'),
@@ -58,6 +70,7 @@ function App() {
       ]);
 
       setUser(userRes.data.user);
+      setCustomers(customersRes.data);
       setOrders(ordersRes.data);
       setDrivers(driversRes.data);
       setVehicles(vehicleRes.data);
@@ -94,11 +107,26 @@ function App() {
     delete api.defaults.headers.common.Authorization;
     setToken('');
     setUser(null);
+    setCustomers([]);
     setOrders([]);
     setDrivers([]);
     setVehicles([]);
     setTours([]);
     setDashboard(null);
+  }
+
+  async function handleCreateCustomer(event) {
+    event.preventDefault();
+    setError('');
+
+    try {
+      const response = await api.post('/customers', customerForm);
+      setCustomers((current) => [response.data, ...current]);
+      setOrderForm((current) => ({ ...current, customer_id: response.data.id }));
+      setCustomerForm(defaultCustomerForm);
+    } catch (createError) {
+      setError(createError.response?.data?.message || 'Customer could not be created');
+    }
   }
 
   async function handleCreateOrder(event) {
@@ -108,6 +136,7 @@ function App() {
     try {
       await api.post('/orders', {
         ...orderForm,
+        customer_id: orderForm.customer_id || null,
         weight: Number(orderForm.weight),
         volume: Number(orderForm.volume),
         pickup_lat: Number(orderForm.pickup_lat),
@@ -131,6 +160,15 @@ function App() {
       loadAllData();
     } catch (planError) {
       setError(planError.response?.data?.message || 'Could not generate tours');
+    }
+  }
+
+  async function updateOrderStatus(orderId, status) {
+    try {
+      await api.patch(`/orders/${orderId}/status`, { status });
+      loadAllData();
+    } catch (updateError) {
+      setError(updateError.response?.data?.message || 'Order status could not be updated');
     }
   }
 
@@ -214,6 +252,19 @@ function App() {
           <form onSubmit={handleCreateOrder} className="stacked-form">
             <div className="grid-two">
               <label>
+                Kunde
+                <select
+                  value={orderForm.customer_id}
+                  onChange={(event) => setOrderForm({ ...orderForm, customer_id: event.target.value })}
+                >
+                  <option value="">Kein Kunde</option>
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>{customer.name}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
                 Titel
                 <input
                   type="text"
@@ -221,7 +272,9 @@ function App() {
                   onChange={(event) => setOrderForm({ ...orderForm, title: event.target.value })}
                 />
               </label>
+            </div>
 
+            <div className="grid-two">
               <label>
                 Datum
                 <input
@@ -229,6 +282,18 @@ function App() {
                   value={orderForm.order_date}
                   onChange={(event) => setOrderForm({ ...orderForm, order_date: event.target.value })}
                 />
+              </label>
+
+              <label>
+                Priorität
+                <select
+                  value={orderForm.priority}
+                  onChange={(event) => setOrderForm({ ...orderForm, priority: event.target.value })}
+                >
+                  <option value="high">Hoch</option>
+                  <option value="normal">Normal</option>
+                  <option value="low">Niedrig</option>
+                </select>
               </label>
             </div>
 
@@ -308,17 +373,7 @@ function App() {
                   onChange={(event) => setOrderForm({ ...orderForm, volume: event.target.value })}
                 />
               </label>
-              <label>
-                Priorität
-                <select
-                  value={orderForm.priority}
-                  onChange={(event) => setOrderForm({ ...orderForm, priority: event.target.value })}
-                >
-                  <option value="high">Hoch</option>
-                  <option value="normal">Normal</option>
-                  <option value="low">Niedrig</option>
-                </select>
-              </label>
+              <div />
               <div />
             </div>
 
@@ -327,7 +382,50 @@ function App() {
         </section>
 
         <section className="panel">
-          <h3>Fahrzeugbestand</h3>
+          <h3>Kunde anlegen</h3>
+          <form onSubmit={handleCreateCustomer} className="stacked-form">
+            <label>
+              Firmenname
+              <input
+                type="text"
+                value={customerForm.name}
+                onChange={(event) => setCustomerForm({ ...customerForm, name: event.target.value })}
+              />
+            </label>
+
+            <label>
+              Ansprechpartner
+              <input
+                type="text"
+                value={customerForm.contact_person}
+                onChange={(event) => setCustomerForm({ ...customerForm, contact_person: event.target.value })}
+              />
+            </label>
+
+            <div className="grid-two">
+              <label>
+                Telefon
+                <input
+                  type="text"
+                  value={customerForm.phone}
+                  onChange={(event) => setCustomerForm({ ...customerForm, phone: event.target.value })}
+                />
+              </label>
+
+              <label>
+                E-Mail
+                <input
+                  type="email"
+                  value={customerForm.email}
+                  onChange={(event) => setCustomerForm({ ...customerForm, email: event.target.value })}
+                />
+              </label>
+            </div>
+
+            <button type="submit" className="primary-button">Kunde speichern</button>
+          </form>
+
+          <h3 style={{ marginTop: '1.5rem' }}>Fahrzeugbestand</h3>
           <div className="simple-list">
             {vehicles.map((vehicle) => (
               <div key={vehicle.id} className="list-row">
@@ -414,22 +512,38 @@ function App() {
             <thead>
               <tr>
                 <th>Auftrag</th>
+                <th>Kunde</th>
                 <th>Datum</th>
                 <th>Priorität</th>
                 <th>Gewicht</th>
                 <th>Volumen</th>
                 <th>Status</th>
+                <th>Aktion</th>
               </tr>
             </thead>
             <tbody>
               {orders.map((order) => (
                 <tr key={order.id}>
                   <td>{order.title}</td>
+                  <td>{order.customer_name || '—'}</td>
                   <td>{order.order_date}</td>
                   <td>{order.priority}</td>
                   <td>{order.weight} kg</td>
                   <td>{order.volume} m³</td>
                   <td>{order.status}</td>
+                  <td>
+                    <div className="inline-actions">
+                      <select
+                        value={order.status}
+                        onChange={(event) => updateOrderStatus(order.id, event.target.value)}
+                      >
+                        <option value="new">Neu</option>
+                        <option value="scheduled">Geplant</option>
+                        <option value="in_transit">In Fahrt</option>
+                        <option value="completed">Abgeschlossen</option>
+                      </select>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -441,3 +555,4 @@ function App() {
 }
 
 export default App;
+
