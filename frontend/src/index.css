@@ -17,9 +17,12 @@ const defaultForm = {
   pickup_lng: 16.3738,
   delivery_lat: 48.2082,
   delivery_lng: 16.3738,
+  pickup_time: '',
+  delivery_time: '',
   weight: 500,
   volume: 6,
-  priority: 'normal'
+  priority: 'normal',
+  notes: ''
 };
 
 const defaultCustomerForm = {
@@ -27,6 +30,22 @@ const defaultCustomerForm = {
   contact_person: '',
   phone: '',
   email: ''
+};
+
+const defaultDriverForm = {
+  name: '',
+  phone: '',
+  license: '',
+  status: 'available'
+};
+
+const defaultVehicleForm = {
+  name: '',
+  plate: '',
+  type: 'van',
+  capacity_weight: 1000,
+  capacity_volume: 10,
+  driver_id: ''
 };
 
 function App() {
@@ -41,11 +60,14 @@ function App() {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
   const [orderForm, setOrderForm] = useState(defaultForm);
   const [customerForm, setCustomerForm] = useState(defaultCustomerForm);
+  const [driverForm, setDriverForm] = useState(defaultDriverForm);
+  const [vehicleForm, setVehicleForm] = useState(defaultVehicleForm);
   const [loginForm, setLoginForm] = useState({ email: 'admin@logix.local', password: 'admin123' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [selectedOrder, setSelectedOrder] = useState(null);
 
   useEffect(() => {
     if (token) {
@@ -60,15 +82,44 @@ function App() {
   );
 
   const filteredOrders = useMemo(() => {
-    return orders.filter((order) => {
-      const matchesSearch = !searchTerm ||
-        order.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        order.customer_name?.toLowerCase().includes(searchTerm.toLowerCase());
+    return [...orders]
+      .filter((order) => {
+        const matchesSearch = !searchTerm ||
+          order.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          order.customer_name?.toLowerCase().includes(searchTerm.toLowerCase());
 
-      const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
-      return matchesSearch && matchesStatus;
-    });
+        const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
+        return matchesSearch && matchesStatus;
+      })
+      .sort((a, b) => {
+        const priorityRank = { high: 0, normal: 1, low: 2 };
+        const diffPriority = (priorityRank[a.priority] ?? 99) - (priorityRank[b.priority] ?? 99);
+        if (diffPriority !== 0) return diffPriority;
+        return (a.delivery_time || '').localeCompare(b.delivery_time || '');
+      });
   }, [orders, searchTerm, statusFilter]);
+
+  const dailyPlan = useMemo(() => {
+    const selected = orders.filter((order) => order.order_date === selectedDate && order.status !== 'completed');
+
+    if (tours.length > 0) {
+      return tours.filter((tour) => tour.tour_date === selectedDate);
+    }
+
+    return [{
+      id: 'unplanned',
+      vehicle_name: 'Nicht geplant',
+      driver_name: 'Dispatcher',
+      stops: selected.map((order) => ({
+        id: order.id,
+        title: order.title,
+        order_title: order.title,
+        address: order.delivery_address || 'Keine Adresse',
+        priority: order.priority,
+        status: order.status
+      }))
+    }];
+  }, [orders, selectedDate, tours]);
 
   async function loadAllData() {
     try {
@@ -126,6 +177,7 @@ function App() {
     setVehicles([]);
     setTours([]);
     setDashboard(null);
+    setSelectedOrder(null);
   }
 
   async function handleCreateCustomer(event) {
@@ -139,6 +191,38 @@ function App() {
       setCustomerForm(defaultCustomerForm);
     } catch (createError) {
       setError(createError.response?.data?.message || 'Customer could not be created');
+    }
+  }
+
+  async function handleCreateDriver(event) {
+    event.preventDefault();
+    setError('');
+
+    try {
+      const response = await api.post('/drivers', driverForm);
+      setDrivers((current) => [response.data, ...current]);
+      setVehicleForm((current) => ({ ...current, driver_id: response.data.id }));
+      setDriverForm(defaultDriverForm);
+    } catch (createError) {
+      setError(createError.response?.data?.message || 'Driver could not be created');
+    }
+  }
+
+  async function handleCreateVehicle(event) {
+    event.preventDefault();
+    setError('');
+
+    try {
+      const response = await api.post('/vehicles', {
+        ...vehicleForm,
+        capacity_weight: Number(vehicleForm.capacity_weight),
+        capacity_volume: Number(vehicleForm.capacity_volume),
+        driver_id: vehicleForm.driver_id || null
+      });
+      setVehicles((current) => [response.data, ...current]);
+      setVehicleForm(defaultVehicleForm);
+    } catch (createError) {
+      setError(createError.response?.data?.message || 'Vehicle could not be created');
     }
   }
 
@@ -165,6 +249,42 @@ function App() {
     }
   }
 
+  async function openOrderDetail(orderId) {
+    try {
+      const response = await api.get(`/orders/${orderId}`);
+      setSelectedOrder(response.data);
+    } catch (detailError) {
+      setError(detailError.response?.data?.message || 'Order details could not be loaded');
+    }
+  }
+
+  async function saveSelectedOrder(event) {
+    event.preventDefault();
+    if (!selectedOrder || !selectedOrder.id) return;
+
+    try {
+      const payload = {
+        title: selectedOrder.title,
+        status: selectedOrder.status,
+        priority: selectedOrder.priority,
+        notes: selectedOrder.notes || '',
+        pickup_address: selectedOrder.pickup_address || '',
+        delivery_address: selectedOrder.delivery_address || '',
+        pickup_time: selectedOrder.pickup_time || '',
+        delivery_time: selectedOrder.delivery_time || '',
+        weight: Number(selectedOrder.weight || 0),
+        volume: Number(selectedOrder.volume || 0)
+      };
+
+      await api.patch(`/orders/${selectedOrder.id}`, payload);
+      await loadAllData();
+      const refreshed = await api.get(`/orders/${selectedOrder.id}`);
+      setSelectedOrder(refreshed.data);
+    } catch (saveError) {
+      setError(saveError.response?.data?.message || 'Order could not be updated');
+    }
+  }
+
   async function planTours() {
     setError('');
 
@@ -183,6 +303,55 @@ function App() {
     } catch (updateError) {
       setError(updateError.response?.data?.message || 'Order status could not be updated');
     }
+  }
+
+  function printDeliveryNote(order) {
+    const printableWindow = window.open('', '_blank', 'width=900,height=800');
+    if (!printableWindow) return;
+
+    printableWindow.document.write(`
+      <html>
+        <head><title>Lieferschein ${order.title}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 24px; color: #111827; }
+            .box { border: 1px solid #d1d5db; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
+            h1 { margin-bottom: 4px; }
+            .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+            .label { color: #6b7280; font-size: 12px; text-transform: uppercase; }
+            .value { font-weight: 600; margin-top: 6px; }
+            @media print { body { padding: 0; } }
+          </style>
+        </head>
+        <body>
+          <div class="box">
+            <h1>Lieferschein</h1>
+            <div class="label">Auftrag</div>
+            <div class="value">${order.title || '—'}</div>
+          </div>
+          <div class="grid">
+            <div class="box">
+              <div class="label">Kunde</div>
+              <div class="value">${order.customer_name || '—'}</div>
+              <div class="label" style="margin-top: 14px;">Abholadresse</div>
+              <div class="value">${order.pickup_address || '—'}</div>
+            </div>
+            <div class="box">
+              <div class="label">Lieferadresse</div>
+              <div class="value">${order.delivery_address || '—'}</div>
+              <div class="label" style="margin-top: 14px;">Lieferzeit</div>
+              <div class="value">${order.delivery_time || '—'}</div>
+            </div>
+          </div>
+          <div class="box">
+            <div class="label">Beschreibung</div>
+            <div class="value">${order.notes || 'Keine Notizen'}</div>
+          </div>
+        </body>
+      </html>
+    `);
+    printableWindow.document.close();
+    printableWindow.focus();
+    printableWindow.print();
   }
 
   if (!token || !user) {
@@ -312,6 +481,26 @@ function App() {
 
             <div className="grid-two">
               <label>
+                Abholzeit
+                <input
+                  type="time"
+                  value={orderForm.pickup_time}
+                  onChange={(event) => setOrderForm({ ...orderForm, pickup_time: event.target.value })}
+                />
+              </label>
+
+              <label>
+                Lieferzeit
+                <input
+                  type="time"
+                  value={orderForm.delivery_time}
+                  onChange={(event) => setOrderForm({ ...orderForm, delivery_time: event.target.value })}
+                />
+              </label>
+            </div>
+
+            <div className="grid-two">
+              <label>
                 Abholadresse
                 <input
                   type="text"
@@ -386,7 +575,14 @@ function App() {
                   onChange={(event) => setOrderForm({ ...orderForm, volume: event.target.value })}
                 />
               </label>
-              <div />
+              <label>
+                Notiz
+                <input
+                  type="text"
+                  value={orderForm.notes}
+                  onChange={(event) => setOrderForm({ ...orderForm, notes: event.target.value })}
+                />
+              </label>
               <div />
             </div>
 
@@ -437,6 +633,126 @@ function App() {
 
             <button type="submit" className="primary-button">Kunde speichern</button>
           </form>
+
+          <div className="split-forms">
+            <div>
+              <h3>Fahrer anlegen</h3>
+              <form onSubmit={handleCreateDriver} className="stacked-form mini-form">
+                <label>
+                  Name
+                  <input
+                    type="text"
+                    value={driverForm.name}
+                    onChange={(event) => setDriverForm({ ...driverForm, name: event.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Telefon
+                  <input
+                    type="text"
+                    value={driverForm.phone}
+                    onChange={(event) => setDriverForm({ ...driverForm, phone: event.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Führerschein
+                  <input
+                    type="text"
+                    value={driverForm.license}
+                    onChange={(event) => setDriverForm({ ...driverForm, license: event.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Status
+                  <select
+                    value={driverForm.status}
+                    onChange={(event) => setDriverForm({ ...driverForm, status: event.target.value })}
+                  >
+                    <option value="available">Verfügbar</option>
+                    <option value="busy">Ausgelastet</option>
+                    <option value="off">Außer Betrieb</option>
+                  </select>
+                </label>
+
+                <button type="submit" className="primary-button">Fahrer speichern</button>
+              </form>
+            </div>
+
+            <div>
+              <h3>Fahrzeug anlegen</h3>
+              <form onSubmit={handleCreateVehicle} className="stacked-form mini-form">
+                <label>
+                  Fahrzeugname
+                  <input
+                    type="text"
+                    value={vehicleForm.name}
+                    onChange={(event) => setVehicleForm({ ...vehicleForm, name: event.target.value })}
+                  />
+                </label>
+
+                <label>
+                  Kennzeichen
+                  <input
+                    type="text"
+                    value={vehicleForm.plate}
+                    onChange={(event) => setVehicleForm({ ...vehicleForm, plate: event.target.value })}
+                  />
+                </label>
+
+                <div className="grid-two">
+                  <label>
+                    Typ
+                    <select
+                      value={vehicleForm.type}
+                      onChange={(event) => setVehicleForm({ ...vehicleForm, type: event.target.value })}
+                    >
+                      <option value="van">Van</option>
+                      <option value="truck">Lkw</option>
+                      <option value="cooler">Kühlwagen</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    Fahrer
+                    <select
+                      value={vehicleForm.driver_id}
+                      onChange={(event) => setVehicleForm({ ...vehicleForm, driver_id: event.target.value })}
+                    >
+                      <option value="">Ohne Fahrer</option>
+                      {drivers.map((driver) => (
+                        <option key={driver.id} value={driver.id}>{driver.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="grid-two">
+                  <label>
+                    Gewichtskapazität (kg)
+                    <input
+                      type="number"
+                      value={vehicleForm.capacity_weight}
+                      onChange={(event) => setVehicleForm({ ...vehicleForm, capacity_weight: event.target.value })}
+                    />
+                  </label>
+
+                  <label>
+                    Volumen (m³)
+                    <input
+                      type="number"
+                      value={vehicleForm.capacity_volume}
+                      onChange={(event) => setVehicleForm({ ...vehicleForm, capacity_volume: event.target.value })}
+                    />
+                  </label>
+                </div>
+
+                <button type="submit" className="primary-button">Fahrzeug speichern</button>
+              </form>
+            </div>
+          </div>
 
           <h3 style={{ marginTop: '1.5rem' }}>Fahrzeugbestand</h3>
           <div className="simple-list">
@@ -499,16 +815,18 @@ function App() {
           </div>
 
           <div className="tour-list">
-            {tours.length === 0 ? (
-              <div className="empty-state">Noch keine Touren geplant.</div>
+            {dailyPlan.length === 0 ? (
+              <div className="empty-state">Noch keine Touren für dieses Datum.</div>
             ) : (
-              tours.map((tour) => (
-                <div key={tour.id} className="tour-card">
+              dailyPlan.map((tour) => (
+                <div key={tour.id || `${tour.vehicle_name}-${tour.tour_date}`} className="tour-card">
                   <h4>{tour.vehicle_name || 'Fahrzeug'} • {tour.driver_name || 'Fahrer'}</h4>
-                  <div className="tiny-meta">{tour.tour_date}</div>
+                  <div className="tiny-meta">{tour.tour_date || selectedDate}</div>
                   <ul>
-                    {tour.stops?.map((stop) => (
-                      <li key={`${tour.id}-${stop.id}`}>{stop.title || stop.order_title || 'Stop'} → {stop.address}</li>
+                    {(tour.stops || []).map((stop) => (
+                      <li key={`${tour.id || 'unplanned'}-${stop.id || stop.order_title}`}>
+                        {stop.title || stop.order_title || 'Stop'} → {stop.address}
+                      </li>
                     )) || <li>Keine Stops</li>}
                   </ul>
                 </div>
@@ -516,6 +834,100 @@ function App() {
             )}
           </div>
         </div>
+      </section>
+
+      <section className="panel detail-panel">
+        <div className="detail-header">
+          <h3>Auftragsdetails</h3>
+          {selectedOrder && <button className="ghost-button" onClick={() => printDeliveryNote(selectedOrder)}>Lieferschein drucken</button>}
+        </div>
+
+        {selectedOrder ? (
+          <form onSubmit={saveSelectedOrder} className="detail-form">
+            <div className="grid-two">
+              <label>
+                Titel
+                <input
+                  type="text"
+                  value={selectedOrder.title || ''}
+                  onChange={(event) => setSelectedOrder({ ...selectedOrder, title: event.target.value })}
+                />
+              </label>
+
+              <label>
+                Status
+                <select
+                  value={selectedOrder.status || 'new'}
+                  onChange={(event) => setSelectedOrder({ ...selectedOrder, status: event.target.value })}
+                >
+                  <option value="new">Neu</option>
+                  <option value="scheduled">Geplant</option>
+                  <option value="in_transit">In Fahrt</option>
+                  <option value="completed">Abgeschlossen</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="grid-two">
+              <label>
+                Priorität
+                <select
+                  value={selectedOrder.priority || 'normal'}
+                  onChange={(event) => setSelectedOrder({ ...selectedOrder, priority: event.target.value })}
+                >
+                  <option value="high">Hoch</option>
+                  <option value="normal">Normal</option>
+                  <option value="low">Niedrig</option>
+                </select>
+              </label>
+
+              <label>
+                Lieferzeit
+                <input
+                  type="time"
+                  value={selectedOrder.delivery_time || ''}
+                  onChange={(event) => setSelectedOrder({ ...selectedOrder, delivery_time: event.target.value })}
+                />
+              </label>
+            </div>
+
+            <div className="grid-two">
+              <label>
+                Abholadresse
+                <input
+                  type="text"
+                  value={selectedOrder.pickup_address || ''}
+                  onChange={(event) => setSelectedOrder({ ...selectedOrder, pickup_address: event.target.value })}
+                />
+              </label>
+
+              <label>
+                Lieferadresse
+                <input
+                  type="text"
+                  value={selectedOrder.delivery_address || ''}
+                  onChange={(event) => setSelectedOrder({ ...selectedOrder, delivery_address: event.target.value })}
+                />
+              </label>
+            </div>
+
+            <label>
+              Notiz
+              <textarea
+                rows="4"
+                value={selectedOrder.notes || ''}
+                onChange={(event) => setSelectedOrder({ ...selectedOrder, notes: event.target.value })}
+              />
+            </label>
+
+            <div className="detail-actions">
+              <button type="submit" className="primary-button">Speichern</button>
+              <button type="button" className="ghost-button" onClick={() => setSelectedOrder(null)}>Schließen</button>
+            </div>
+          </form>
+        ) : (
+          <div className="empty-state">Wähle einen Auftrag aus der Liste, um Details anzusehen.</div>
+        )}
       </section>
 
       <section className="panel">
@@ -555,7 +967,7 @@ function App() {
             <tbody>
               {filteredOrders.map((order) => (
                 <tr key={order.id}>
-                  <td>{order.title}</td>
+                  <td onClick={() => openOrderDetail(order.id)} className="clickable-cell">{order.title}</td>
                   <td>{order.customer_name || '—'}</td>
                   <td>{order.order_date}</td>
                   <td>{order.priority}</td>
@@ -573,6 +985,7 @@ function App() {
                         <option value="in_transit">In Fahrt</option>
                         <option value="completed">Abgeschlossen</option>
                       </select>
+                      <button type="button" className="mini-button" onClick={() => openOrderDetail(order.id)}>Detail</button>
                     </div>
                   </td>
                 </tr>
