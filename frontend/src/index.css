@@ -1,331 +1,588 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+import { useEffect, useMemo, useState } from 'react';
+import axios from 'axios';
+import { MapContainer, Marker, Popup, TileLayer } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
 
-:root {
-  font-family: 'Inter', sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  color: #0f172a;
-  background: #f5f7fb;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
+const api = axios.create({
+  baseURL: 'http://localhost:4000/api'
+});
 
-* {
-  box-sizing: border-box;
-}
+const defaultForm = {
+  customer_id: '',
+  title: '',
+  order_date: new Date().toISOString().slice(0, 10),
+  pickup_address: '',
+  delivery_address: '',
+  pickup_lat: 48.2082,
+  pickup_lng: 16.3738,
+  delivery_lat: 48.2082,
+  delivery_lng: 16.3738,
+  weight: 500,
+  volume: 6,
+  priority: 'normal'
+};
 
-html, body, #root {
-  margin: 0;
-  min-height: 100%;
-  background: #f5f7fb;
-}
+const defaultCustomerForm = {
+  name: '',
+  contact_person: '',
+  phone: '',
+  email: ''
+};
 
-body {
-  min-height: 100vh;
-}
+function App() {
+  const [token, setToken] = useState(localStorage.getItem('logixToken') || '');
+  const [user, setUser] = useState(null);
+  const [customers, setCustomers] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [drivers, setDrivers] = useState([]);
+  const [vehicles, setVehicles] = useState([]);
+  const [tours, setTours] = useState([]);
+  const [dashboard, setDashboard] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
+  const [orderForm, setOrderForm] = useState(defaultForm);
+  const [customerForm, setCustomerForm] = useState(defaultCustomerForm);
+  const [loginForm, setLoginForm] = useState({ email: 'admin@logix.local', password: 'admin123' });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
 
-button, input, select {
-  font: inherit;
-}
+  useEffect(() => {
+    if (token) {
+      api.defaults.headers.common.Authorization = `Bearer ${token}`;
+      loadAllData();
+    }
+  }, [token]);
 
-button {
-  cursor: pointer;
-}
+  const mapOrders = useMemo(
+    () => orders.filter((order) => order.delivery_lat && order.delivery_lng),
+    [orders]
+  );
 
-.auth-shell {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  background: linear-gradient(135deg, #0f172a, #0f766e);
-  padding: 24px;
-}
+  const filteredOrders = useMemo(() => {
+    return orders.filter((order) => {
+      const matchesSearch = !searchTerm ||
+        order.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        order.customer_name?.toLowerCase().includes(searchTerm.toLowerCase());
 
-.auth-card {
-  width: min(100%, 460px);
-  background: rgba(255, 255, 255, 0.96);
-  backdrop-filter: blur(14px);
-  border-radius: 18px;
-  padding: 28px;
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2);
-}
+      const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [orders, searchTerm, statusFilter]);
 
-.brand-line {
-  font-size: 0.8rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: #0f766e;
-  font-weight: 800;
-}
+  async function loadAllData() {
+    try {
+      const [userRes, customersRes, ordersRes, driversRes, vehicleRes, toursRes, dashboardRes] = await Promise.all([
+        api.get('/auth/me'),
+        api.get('/customers'),
+        api.get('/orders'),
+        api.get('/drivers'),
+        api.get('/vehicles'),
+        api.get('/tours'),
+        api.get('/dashboard')
+      ]);
 
-.auth-card h1 {
-  margin: 10px 0 8px;
-  font-size: 2rem;
-}
-
-.auth-card p {
-  margin: 0 0 20px;
-  color: #475569;
-}
-
-.auth-form,
-.stacked-form {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.auth-form label,
-.stacked-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-weight: 500;
-  color: #334155;
-}
-
-input, select {
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid #cbd5e1;
-  background: #fff;
-}
-
-button.primary-button {
-  border: none;
-  background: #0f766e;
-  color: white;
-  padding: 12px 18px;
-  border-radius: 10px;
-  font-weight: 700;
-}
-
-button.primary-button:hover {
-  background: #0d5e5a;
-}
-
-button.ghost-button {
-  border: 1px solid #cbd5e1;
-  background: white;
-  color: #0f172a;
-  padding: 8px 12px;
-  border-radius: 10px;
-}
-
-.app-shell {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 24px;
-}
-
-.topbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.topbar h2 {
-  margin: 0;
-}
-
-.topbar-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.stat-card {
-  background: white;
-  border-radius: 14px;
-  padding: 18px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.stat-card span {
-  color: #64748b;
-  font-size: 0.9rem;
-}
-
-.stat-card strong {
-  font-size: 2rem;
-}
-
-.content-grid {
-  display: grid;
-  grid-template-columns: 1.4fr 0.9fr;
-  gap: 20px;
-  margin-bottom: 24px;
-}
-
-.panel {
-  background: white;
-  border-radius: 16px;
-  padding: 20px;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
-}
-
-.panel h3 {
-  margin-top: 0;
-  margin-bottom: 18px;
-}
-
-.grid-two,
-.grid-four {
-  display: grid;
-  gap: 12px;
-}
-
-.grid-two {
-  grid-template-columns: 1fr 1fr;
-}
-
-.grid-four {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.simple-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.list-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  background: #f8fafc;
-  border-radius: 10px;
-  padding: 12px 14px;
-}
-
-.map-panel {
-  margin-bottom: 24px;
-}
-
-.plan-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.plan-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.map-grid {
-  display: grid;
-  grid-template-columns: 1.3fr 0.7fr;
-  gap: 20px;
-}
-
-.map-wrapper {
-  border-radius: 12px;
-  overflow: hidden;
-  border: 1px solid #e2e8f0;
-}
-
-.tour-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.tour-card {
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 12px;
-  background: #f8fafc;
-}
-
-.tour-card h4 {
-  margin: 0 0 6px;
-}
-
-.tiny-meta {
-  font-size: 0.8rem;
-  color: #64748b;
-  margin-bottom: 8px;
-}
-
-.tour-card ul {
-  margin: 0;
-  padding-left: 18px;
-  color: #334155;
-}
-
-.empty-state {
-  border: 1px dashed #cbd5e1;
-  border-radius: 12px;
-  padding: 18px;
-  text-align: center;
-  color: #64748b;
-  background: #f8fafc;
-}
-
-.table-wrap {
-  overflow-x: auto;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-th, td {
-  text-align: left;
-  padding: 12px 10px;
-  border-bottom: 1px solid #e2e8f0;
-}
-
-th {
-  color: #475569;
-  font-weight: 700;
-}
-
-.error-box {
-  background: #fff1f2;
-  color: #be123c;
-  border: 1px solid #fecdd3;
-  border-radius: 10px;
-  padding: 10px 12px;
-  margin-bottom: 16px;
-}
-
-.inline-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-@media (max-width: 980px) {
-  .content-grid,
-  .map-grid,
-  .stats-grid,
-  .grid-two,
-  .grid-four {
-    grid-template-columns: 1fr;
+      setUser(userRes.data.user);
+      setCustomers(customersRes.data);
+      setOrders(ordersRes.data);
+      setDrivers(driversRes.data);
+      setVehicles(vehicleRes.data);
+      setTours(toursRes.data);
+      setDashboard(dashboardRes.data);
+    } catch (loadError) {
+      console.error(loadError);
+      setError('Session expired or backend unavailable.');
+      logout();
+    }
   }
 
-  .topbar,
-  .plan-header {
-    flex-direction: column;
-    align-items: flex-start;
+  async function handleLogin(event) {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
+
+    try {
+      const response = await api.post('/auth/login', loginForm);
+      const nextToken = response.data.token;
+      localStorage.setItem('logixToken', nextToken);
+      setToken(nextToken);
+      api.defaults.headers.common.Authorization = `Bearer ${nextToken}`;
+      setUser(response.data.user);
+    } catch (loginError) {
+      setError(loginError.response?.data?.message || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
   }
+
+  function logout() {
+    localStorage.removeItem('logixToken');
+    delete api.defaults.headers.common.Authorization;
+    setToken('');
+    setUser(null);
+    setCustomers([]);
+    setOrders([]);
+    setDrivers([]);
+    setVehicles([]);
+    setTours([]);
+    setDashboard(null);
+  }
+
+  async function handleCreateCustomer(event) {
+    event.preventDefault();
+    setError('');
+
+    try {
+      const response = await api.post('/customers', customerForm);
+      setCustomers((current) => [response.data, ...current]);
+      setOrderForm((current) => ({ ...current, customer_id: response.data.id }));
+      setCustomerForm(defaultCustomerForm);
+    } catch (createError) {
+      setError(createError.response?.data?.message || 'Customer could not be created');
+    }
+  }
+
+  async function handleCreateOrder(event) {
+    event.preventDefault();
+    setError('');
+
+    try {
+      await api.post('/orders', {
+        ...orderForm,
+        customer_id: orderForm.customer_id || null,
+        weight: Number(orderForm.weight),
+        volume: Number(orderForm.volume),
+        pickup_lat: Number(orderForm.pickup_lat),
+        pickup_lng: Number(orderForm.pickup_lng),
+        delivery_lat: Number(orderForm.delivery_lat),
+        delivery_lng: Number(orderForm.delivery_lng)
+      });
+
+      setOrderForm(defaultForm);
+      loadAllData();
+    } catch (createError) {
+      setError(createError.response?.data?.message || 'Could not create order');
+    }
+  }
+
+  async function planTours() {
+    setError('');
+
+    try {
+      await api.post('/tours/plan', { date: selectedDate });
+      loadAllData();
+    } catch (planError) {
+      setError(planError.response?.data?.message || 'Could not generate tours');
+    }
+  }
+
+  async function updateOrderStatus(orderId, status) {
+    try {
+      await api.patch(`/orders/${orderId}/status`, { status });
+      loadAllData();
+    } catch (updateError) {
+      setError(updateError.response?.data?.message || 'Order status could not be updated');
+    }
+  }
+
+  if (!token || !user) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="brand-line">LogiX</div>
+          <h1>Transport & Dispo</h1>
+          <p>Effiziente Auftrags- und Tourenverwaltung für kleine bis mittlere Flotten.</p>
+
+          {error && <div className="error-box">{error}</div>}
+
+          <form onSubmit={handleLogin} className="auth-form">
+            <label>
+              E-Mail
+              <input
+                type="email"
+                value={loginForm.email}
+                onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })}
+              />
+            </label>
+
+            <label>
+              Passwort
+              <input
+                type="password"
+                value={loginForm.password}
+                onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
+              />
+            </label>
+
+            <button type="submit" disabled={loading}>
+              {loading ? 'Anmeldung...' : 'Anmelden'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div>
+          <div className="brand-line">LogiX</div>
+          <h2>Dispo & Transport</h2>
+        </div>
+        <div className="topbar-right">
+          <span>{user.name}</span>
+          <button onClick={logout} className="ghost-button">Abmelden</button>
+        </div>
+      </header>
+
+      {error && <div className="error-box">{error}</div>}
+
+      {dashboard && (
+        <section className="stats-grid">
+          <div className="stat-card">
+            <span>Aufträge</span>
+            <strong>{dashboard.summary.orders}</strong>
+          </div>
+          <div className="stat-card">
+            <span>Fahrzeuge</span>
+            <strong>{dashboard.summary.vehicles}</strong>
+          </div>
+          <div className="stat-card">
+            <span>Fahrer</span>
+            <strong>{dashboard.summary.drivers}</strong>
+          </div>
+          <div className="stat-card">
+            <span>Touren</span>
+            <strong>{dashboard.summary.tours}</strong>
+          </div>
+        </section>
+      )}
+
+      <main className="content-grid">
+        <section className="panel">
+          <h3>Auftrag erfassen</h3>
+          <form onSubmit={handleCreateOrder} className="stacked-form">
+            <div className="grid-two">
+              <label>
+                Kunde
+                <select
+                  value={orderForm.customer_id}
+                  onChange={(event) => setOrderForm({ ...orderForm, customer_id: event.target.value })}
+                >
+                  <option value="">Kein Kunde</option>
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>{customer.name}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Titel
+                <input
+                  type="text"
+                  value={orderForm.title}
+                  onChange={(event) => setOrderForm({ ...orderForm, title: event.target.value })}
+                />
+              </label>
+            </div>
+
+            <div className="grid-two">
+              <label>
+                Datum
+                <input
+                  type="date"
+                  value={orderForm.order_date}
+                  onChange={(event) => setOrderForm({ ...orderForm, order_date: event.target.value })}
+                />
+              </label>
+
+              <label>
+                Priorität
+                <select
+                  value={orderForm.priority}
+                  onChange={(event) => setOrderForm({ ...orderForm, priority: event.target.value })}
+                >
+                  <option value="high">Hoch</option>
+                  <option value="normal">Normal</option>
+                  <option value="low">Niedrig</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="grid-two">
+              <label>
+                Abholadresse
+                <input
+                  type="text"
+                  value={orderForm.pickup_address}
+                  onChange={(event) => setOrderForm({ ...orderForm, pickup_address: event.target.value })}
+                />
+              </label>
+
+              <label>
+                Lieferadresse
+                <input
+                  type="text"
+                  value={orderForm.delivery_address}
+                  onChange={(event) => setOrderForm({ ...orderForm, delivery_address: event.target.value })}
+                />
+              </label>
+            </div>
+
+            <div className="grid-four">
+              <label>
+                Pickup LAT
+                <input
+                  type="number"
+                  step="0.0001"
+                  value={orderForm.pickup_lat}
+                  onChange={(event) => setOrderForm({ ...orderForm, pickup_lat: event.target.value })}
+                />
+              </label>
+              <label>
+                Pickup LNG
+                <input
+                  type="number"
+                  step="0.0001"
+                  value={orderForm.pickup_lng}
+                  onChange={(event) => setOrderForm({ ...orderForm, pickup_lng: event.target.value })}
+                />
+              </label>
+              <label>
+                Delivery LAT
+                <input
+                  type="number"
+                  step="0.0001"
+                  value={orderForm.delivery_lat}
+                  onChange={(event) => setOrderForm({ ...orderForm, delivery_lat: event.target.value })}
+                />
+              </label>
+              <label>
+                Delivery LNG
+                <input
+                  type="number"
+                  step="0.0001"
+                  value={orderForm.delivery_lng}
+                  onChange={(event) => setOrderForm({ ...orderForm, delivery_lng: event.target.value })}
+                />
+              </label>
+            </div>
+
+            <div className="grid-four">
+              <label>
+                Gewicht (kg)
+                <input
+                  type="number"
+                  value={orderForm.weight}
+                  onChange={(event) => setOrderForm({ ...orderForm, weight: event.target.value })}
+                />
+              </label>
+              <label>
+                Volumen (m³)
+                <input
+                  type="number"
+                  value={orderForm.volume}
+                  onChange={(event) => setOrderForm({ ...orderForm, volume: event.target.value })}
+                />
+              </label>
+              <div />
+              <div />
+            </div>
+
+            <button type="submit" className="primary-button">Auftrag speichern</button>
+          </form>
+        </section>
+
+        <section className="panel">
+          <h3>Kunde anlegen</h3>
+          <form onSubmit={handleCreateCustomer} className="stacked-form">
+            <label>
+              Firmenname
+              <input
+                type="text"
+                value={customerForm.name}
+                onChange={(event) => setCustomerForm({ ...customerForm, name: event.target.value })}
+              />
+            </label>
+
+            <label>
+              Ansprechpartner
+              <input
+                type="text"
+                value={customerForm.contact_person}
+                onChange={(event) => setCustomerForm({ ...customerForm, contact_person: event.target.value })}
+              />
+            </label>
+
+            <div className="grid-two">
+              <label>
+                Telefon
+                <input
+                  type="text"
+                  value={customerForm.phone}
+                  onChange={(event) => setCustomerForm({ ...customerForm, phone: event.target.value })}
+                />
+              </label>
+
+              <label>
+                E-Mail
+                <input
+                  type="email"
+                  value={customerForm.email}
+                  onChange={(event) => setCustomerForm({ ...customerForm, email: event.target.value })}
+                />
+              </label>
+            </div>
+
+            <button type="submit" className="primary-button">Kunde speichern</button>
+          </form>
+
+          <h3 style={{ marginTop: '1.5rem' }}>Fahrzeugbestand</h3>
+          <div className="simple-list">
+            {vehicles.map((vehicle) => (
+              <div key={vehicle.id} className="list-row">
+                <div>
+                  <strong>{vehicle.name}</strong>
+                  <div>{vehicle.plate} • {vehicle.type}</div>
+                </div>
+                <div>{vehicle.driver_name || 'Ohne Fahrer'}</div>
+              </div>
+            ))}
+          </div>
+
+          <h3 style={{ marginTop: '1.5rem' }}>Fahrer</h3>
+          <div className="simple-list">
+            {drivers.map((driver) => (
+              <div key={driver.id} className="list-row">
+                <div>
+                  <strong>{driver.name}</strong>
+                  <div>{driver.license}</div>
+                </div>
+                <div>{driver.status}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </main>
+
+      <section className="panel map-panel">
+        <div className="plan-header">
+          <h3>Dispo-Plan</h3>
+          <div className="plan-actions">
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(event) => setSelectedDate(event.target.value)}
+            />
+            <button onClick={planTours} className="primary-button">Touren planen</button>
+          </div>
+        </div>
+
+        <div className="map-grid">
+          <div className="map-wrapper">
+            <MapContainer center={[47.8, 13.1]} zoom={6} scrollWheelZoom style={{ height: '380px', width: '100%' }}>
+              <TileLayer
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                attribution='&copy; OpenStreetMap contributors'
+              />
+
+              {mapOrders.map((order) => (
+                <Marker key={order.id} position={[order.delivery_lat, order.delivery_lng]}>
+                  <Popup>
+                    <strong>{order.title}</strong><br />
+                    {order.delivery_address}
+                  </Popup>
+                </Marker>
+              ))}
+            </MapContainer>
+          </div>
+
+          <div className="tour-list">
+            {tours.length === 0 ? (
+              <div className="empty-state">Noch keine Touren geplant.</div>
+            ) : (
+              tours.map((tour) => (
+                <div key={tour.id} className="tour-card">
+                  <h4>{tour.vehicle_name || 'Fahrzeug'} • {tour.driver_name || 'Fahrer'}</h4>
+                  <div className="tiny-meta">{tour.tour_date}</div>
+                  <ul>
+                    {tour.stops?.map((stop) => (
+                      <li key={`${tour.id}-${stop.id}`}>{stop.title || stop.order_title || 'Stop'} → {stop.address}</li>
+                    )) || <li>Keine Stops</li>}
+                  </ul>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="list-toolbar">
+          <h3>Auftragsübersicht</h3>
+          <div className="toolbar-row">
+            <input
+              type="search"
+              placeholder="Suche Auftrag / Kunde"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+            />
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+              <option value="all">Alle Status</option>
+              <option value="new">Neu</option>
+              <option value="scheduled">Geplant</option>
+              <option value="in_transit">In Fahrt</option>
+              <option value="completed">Abgeschlossen</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Auftrag</th>
+                <th>Kunde</th>
+                <th>Datum</th>
+                <th>Priorität</th>
+                <th>Gewicht</th>
+                <th>Volumen</th>
+                <th>Status</th>
+                <th>Aktion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredOrders.map((order) => (
+                <tr key={order.id}>
+                  <td>{order.title}</td>
+                  <td>{order.customer_name || '—'}</td>
+                  <td>{order.order_date}</td>
+                  <td>{order.priority}</td>
+                  <td>{order.weight} kg</td>
+                  <td>{order.volume} m³</td>
+                  <td>{order.status}</td>
+                  <td>
+                    <div className="inline-actions">
+                      <select
+                        value={order.status}
+                        onChange={(event) => updateOrderStatus(order.id, event.target.value)}
+                      >
+                        <option value="new">Neu</option>
+                        <option value="scheduled">Geplant</option>
+                        <option value="in_transit">In Fahrt</option>
+                        <option value="completed">Abgeschlossen</option>
+                      </select>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
 }
+
+export default App;

@@ -1,558 +1,418 @@
-import { useEffect, useMemo, useState } from 'react';
-import axios from 'axios';
-import { MapContainer, Marker, Popup, TileLayer } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import express from 'express';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+import { all, get, initializeDatabase, run } from './db.js';
+import { seedDatabase } from './seed.js';
 
-const api = axios.create({
-  baseURL: 'http://localhost:4000/api'
-});
+dotenv.config();
 
-const defaultForm = {
-  customer_id: '',
-  title: '',
-  order_date: new Date().toISOString().slice(0, 10),
-  pickup_address: '',
-  delivery_address: '',
-  pickup_lat: 48.2082,
-  pickup_lng: 16.3738,
-  delivery_lat: 48.2082,
-  delivery_lng: 16.3738,
-  weight: 500,
-  volume: 6,
-  priority: 'normal'
-};
+const app = express();
+const PORT = process.env.PORT || 4000;
+const JWT_SECRET = process.env.JWT_SECRET || 'logix-demo-secret';
 
-const defaultCustomerForm = {
-  name: '',
-  contact_person: '',
-  phone: '',
-  email: ''
-};
+app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5173', credentials: true }));
+app.use(express.json());
 
-function App() {
-  const [token, setToken] = useState(localStorage.getItem('logixToken') || '');
-  const [user, setUser] = useState(null);
-  const [customers, setCustomers] = useState([]);
-  const [orders, setOrders] = useState([]);
-  const [drivers, setDrivers] = useState([]);
-  const [vehicles, setVehicles] = useState([]);
-  const [tours, setTours] = useState([]);
-  const [dashboard, setDashboard] = useState(null);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
-  const [orderForm, setOrderForm] = useState(defaultForm);
-  const [customerForm, setCustomerForm] = useState(defaultCustomerForm);
-  const [loginForm, setLoginForm] = useState({ email: 'admin@logix.local', password: 'admin123' });
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (token) {
-      api.defaults.headers.common.Authorization = `Bearer ${token}`;
-      loadAllData();
-    }
-  }, [token]);
-
-  const mapOrders = useMemo(
-    () => orders.filter((order) => order.delivery_lat && order.delivery_lng),
-    [orders]
-  );
-
-  async function loadAllData() {
-    try {
-      const [userRes, customersRes, ordersRes, driversRes, vehicleRes, toursRes, dashboardRes] = await Promise.all([
-        api.get('/auth/me'),
-        api.get('/customers'),
-        api.get('/orders'),
-        api.get('/drivers'),
-        api.get('/vehicles'),
-        api.get('/tours'),
-        api.get('/dashboard')
-      ]);
-
-      setUser(userRes.data.user);
-      setCustomers(customersRes.data);
-      setOrders(ordersRes.data);
-      setDrivers(driversRes.data);
-      setVehicles(vehicleRes.data);
-      setTours(toursRes.data);
-      setDashboard(dashboardRes.data);
-    } catch (loadError) {
-      console.error(loadError);
-      setError('Session expired or backend unavailable.');
-      logout();
-    }
-  }
-
-  async function handleLogin(event) {
-    event.preventDefault();
-    setLoading(true);
-    setError('');
-
-    try {
-      const response = await api.post('/auth/login', loginForm);
-      const nextToken = response.data.token;
-      localStorage.setItem('logixToken', nextToken);
-      setToken(nextToken);
-      api.defaults.headers.common.Authorization = `Bearer ${nextToken}`;
-      setUser(response.data.user);
-    } catch (loginError) {
-      setError(loginError.response?.data?.message || 'Login failed');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function logout() {
-    localStorage.removeItem('logixToken');
-    delete api.defaults.headers.common.Authorization;
-    setToken('');
-    setUser(null);
-    setCustomers([]);
-    setOrders([]);
-    setDrivers([]);
-    setVehicles([]);
-    setTours([]);
-    setDashboard(null);
-  }
-
-  async function handleCreateCustomer(event) {
-    event.preventDefault();
-    setError('');
-
-    try {
-      const response = await api.post('/customers', customerForm);
-      setCustomers((current) => [response.data, ...current]);
-      setOrderForm((current) => ({ ...current, customer_id: response.data.id }));
-      setCustomerForm(defaultCustomerForm);
-    } catch (createError) {
-      setError(createError.response?.data?.message || 'Customer could not be created');
-    }
-  }
-
-  async function handleCreateOrder(event) {
-    event.preventDefault();
-    setError('');
-
-    try {
-      await api.post('/orders', {
-        ...orderForm,
-        customer_id: orderForm.customer_id || null,
-        weight: Number(orderForm.weight),
-        volume: Number(orderForm.volume),
-        pickup_lat: Number(orderForm.pickup_lat),
-        pickup_lng: Number(orderForm.pickup_lng),
-        delivery_lat: Number(orderForm.delivery_lat),
-        delivery_lng: Number(orderForm.delivery_lng)
-      });
-
-      setOrderForm(defaultForm);
-      loadAllData();
-    } catch (createError) {
-      setError(createError.response?.data?.message || 'Could not create order');
-    }
-  }
-
-  async function planTours() {
-    setError('');
-
-    try {
-      await api.post('/tours/plan', { date: selectedDate });
-      loadAllData();
-    } catch (planError) {
-      setError(planError.response?.data?.message || 'Could not generate tours');
-    }
-  }
-
-  async function updateOrderStatus(orderId, status) {
-    try {
-      await api.patch(`/orders/${orderId}/status`, { status });
-      loadAllData();
-    } catch (updateError) {
-      setError(updateError.response?.data?.message || 'Order status could not be updated');
-    }
-  }
-
-  if (!token || !user) {
-    return (
-      <div className="auth-shell">
-        <div className="auth-card">
-          <div className="brand-line">LogiX</div>
-          <h1>Transport & Dispo</h1>
-          <p>Effiziente Auftrags- und Tourenverwaltung für kleine bis mittlere Flotten.</p>
-
-          {error && <div className="error-box">{error}</div>}
-
-          <form onSubmit={handleLogin} className="auth-form">
-            <label>
-              E-Mail
-              <input
-                type="email"
-                value={loginForm.email}
-                onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })}
-              />
-            </label>
-
-            <label>
-              Passwort
-              <input
-                type="password"
-                value={loginForm.password}
-                onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
-              />
-            </label>
-
-            <button type="submit" disabled={loading}>
-              {loading ? 'Anmeldung...' : 'Anmelden'}
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div>
-          <div className="brand-line">LogiX</div>
-          <h2>Dispo & Transport</h2>
-        </div>
-        <div className="topbar-right">
-          <span>{user.name}</span>
-          <button onClick={logout} className="ghost-button">Abmelden</button>
-        </div>
-      </header>
-
-      {error && <div className="error-box">{error}</div>}
-
-      {dashboard && (
-        <section className="stats-grid">
-          <div className="stat-card">
-            <span>Aufträge</span>
-            <strong>{dashboard.summary.orders}</strong>
-          </div>
-          <div className="stat-card">
-            <span>Fahrzeuge</span>
-            <strong>{dashboard.summary.vehicles}</strong>
-          </div>
-          <div className="stat-card">
-            <span>Fahrer</span>
-            <strong>{dashboard.summary.drivers}</strong>
-          </div>
-          <div className="stat-card">
-            <span>Touren</span>
-            <strong>{dashboard.summary.tours}</strong>
-          </div>
-        </section>
-      )}
-
-      <main className="content-grid">
-        <section className="panel">
-          <h3>Auftrag erfassen</h3>
-          <form onSubmit={handleCreateOrder} className="stacked-form">
-            <div className="grid-two">
-              <label>
-                Kunde
-                <select
-                  value={orderForm.customer_id}
-                  onChange={(event) => setOrderForm({ ...orderForm, customer_id: event.target.value })}
-                >
-                  <option value="">Kein Kunde</option>
-                  {customers.map((customer) => (
-                    <option key={customer.id} value={customer.id}>{customer.name}</option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Titel
-                <input
-                  type="text"
-                  value={orderForm.title}
-                  onChange={(event) => setOrderForm({ ...orderForm, title: event.target.value })}
-                />
-              </label>
-            </div>
-
-            <div className="grid-two">
-              <label>
-                Datum
-                <input
-                  type="date"
-                  value={orderForm.order_date}
-                  onChange={(event) => setOrderForm({ ...orderForm, order_date: event.target.value })}
-                />
-              </label>
-
-              <label>
-                Priorität
-                <select
-                  value={orderForm.priority}
-                  onChange={(event) => setOrderForm({ ...orderForm, priority: event.target.value })}
-                >
-                  <option value="high">Hoch</option>
-                  <option value="normal">Normal</option>
-                  <option value="low">Niedrig</option>
-                </select>
-              </label>
-            </div>
-
-            <div className="grid-two">
-              <label>
-                Abholadresse
-                <input
-                  type="text"
-                  value={orderForm.pickup_address}
-                  onChange={(event) => setOrderForm({ ...orderForm, pickup_address: event.target.value })}
-                />
-              </label>
-
-              <label>
-                Lieferadresse
-                <input
-                  type="text"
-                  value={orderForm.delivery_address}
-                  onChange={(event) => setOrderForm({ ...orderForm, delivery_address: event.target.value })}
-                />
-              </label>
-            </div>
-
-            <div className="grid-four">
-              <label>
-                Pickup LAT
-                <input
-                  type="number"
-                  step="0.0001"
-                  value={orderForm.pickup_lat}
-                  onChange={(event) => setOrderForm({ ...orderForm, pickup_lat: event.target.value })}
-                />
-              </label>
-              <label>
-                Pickup LNG
-                <input
-                  type="number"
-                  step="0.0001"
-                  value={orderForm.pickup_lng}
-                  onChange={(event) => setOrderForm({ ...orderForm, pickup_lng: event.target.value })}
-                />
-              </label>
-              <label>
-                Delivery LAT
-                <input
-                  type="number"
-                  step="0.0001"
-                  value={orderForm.delivery_lat}
-                  onChange={(event) => setOrderForm({ ...orderForm, delivery_lat: event.target.value })}
-                />
-              </label>
-              <label>
-                Delivery LNG
-                <input
-                  type="number"
-                  step="0.0001"
-                  value={orderForm.delivery_lng}
-                  onChange={(event) => setOrderForm({ ...orderForm, delivery_lng: event.target.value })}
-                />
-              </label>
-            </div>
-
-            <div className="grid-four">
-              <label>
-                Gewicht (kg)
-                <input
-                  type="number"
-                  value={orderForm.weight}
-                  onChange={(event) => setOrderForm({ ...orderForm, weight: event.target.value })}
-                />
-              </label>
-              <label>
-                Volumen (m³)
-                <input
-                  type="number"
-                  value={orderForm.volume}
-                  onChange={(event) => setOrderForm({ ...orderForm, volume: event.target.value })}
-                />
-              </label>
-              <div />
-              <div />
-            </div>
-
-            <button type="submit" className="primary-button">Auftrag speichern</button>
-          </form>
-        </section>
-
-        <section className="panel">
-          <h3>Kunde anlegen</h3>
-          <form onSubmit={handleCreateCustomer} className="stacked-form">
-            <label>
-              Firmenname
-              <input
-                type="text"
-                value={customerForm.name}
-                onChange={(event) => setCustomerForm({ ...customerForm, name: event.target.value })}
-              />
-            </label>
-
-            <label>
-              Ansprechpartner
-              <input
-                type="text"
-                value={customerForm.contact_person}
-                onChange={(event) => setCustomerForm({ ...customerForm, contact_person: event.target.value })}
-              />
-            </label>
-
-            <div className="grid-two">
-              <label>
-                Telefon
-                <input
-                  type="text"
-                  value={customerForm.phone}
-                  onChange={(event) => setCustomerForm({ ...customerForm, phone: event.target.value })}
-                />
-              </label>
-
-              <label>
-                E-Mail
-                <input
-                  type="email"
-                  value={customerForm.email}
-                  onChange={(event) => setCustomerForm({ ...customerForm, email: event.target.value })}
-                />
-              </label>
-            </div>
-
-            <button type="submit" className="primary-button">Kunde speichern</button>
-          </form>
-
-          <h3 style={{ marginTop: '1.5rem' }}>Fahrzeugbestand</h3>
-          <div className="simple-list">
-            {vehicles.map((vehicle) => (
-              <div key={vehicle.id} className="list-row">
-                <div>
-                  <strong>{vehicle.name}</strong>
-                  <div>{vehicle.plate} • {vehicle.type}</div>
-                </div>
-                <div>{vehicle.driver_name || 'Ohne Fahrer'}</div>
-              </div>
-            ))}
-          </div>
-
-          <h3 style={{ marginTop: '1.5rem' }}>Fahrer</h3>
-          <div className="simple-list">
-            {drivers.map((driver) => (
-              <div key={driver.id} className="list-row">
-                <div>
-                  <strong>{driver.name}</strong>
-                  <div>{driver.license}</div>
-                </div>
-                <div>{driver.status}</div>
-              </div>
-            ))}
-          </div>
-        </section>
-      </main>
-
-      <section className="panel map-panel">
-        <div className="plan-header">
-          <h3>Dispo-Plan</h3>
-          <div className="plan-actions">
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(event) => setSelectedDate(event.target.value)}
-            />
-            <button onClick={planTours} className="primary-button">Touren planen</button>
-          </div>
-        </div>
-
-        <div className="map-grid">
-          <div className="map-wrapper">
-            <MapContainer center={[47.8, 13.1]} zoom={6} scrollWheelZoom style={{ height: '380px', width: '100%' }}>
-              <TileLayer
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                attribution='&copy; OpenStreetMap contributors'
-              />
-
-              {mapOrders.map((order) => (
-                <Marker key={order.id} position={[order.delivery_lat, order.delivery_lng]}>
-                  <Popup>
-                    <strong>{order.title}</strong><br />
-                    {order.delivery_address}
-                  </Popup>
-                </Marker>
-              ))}
-            </MapContainer>
-          </div>
-
-          <div className="tour-list">
-            {tours.length === 0 ? (
-              <div className="empty-state">Noch keine Touren geplant.</div>
-            ) : (
-              tours.map((tour) => (
-                <div key={tour.id} className="tour-card">
-                  <h4>{tour.vehicle_name || 'Fahrzeug'} • {tour.driver_name || 'Fahrer'}</h4>
-                  <div className="tiny-meta">{tour.tour_date}</div>
-                  <ul>
-                    {tour.stops?.map((stop) => (
-                      <li key={`${tour.id}-${stop.id}`}>{stop.title || stop.order_title || 'Stop'} → {stop.address}</li>
-                    )) || <li>Keine Stops</li>}
-                  </ul>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className="panel">
-        <h3>Auftragsübersicht</h3>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Auftrag</th>
-                <th>Kunde</th>
-                <th>Datum</th>
-                <th>Priorität</th>
-                <th>Gewicht</th>
-                <th>Volumen</th>
-                <th>Status</th>
-                <th>Aktion</th>
-              </tr>
-            </thead>
-            <tbody>
-              {orders.map((order) => (
-                <tr key={order.id}>
-                  <td>{order.title}</td>
-                  <td>{order.customer_name || '—'}</td>
-                  <td>{order.order_date}</td>
-                  <td>{order.priority}</td>
-                  <td>{order.weight} kg</td>
-                  <td>{order.volume} m³</td>
-                  <td>{order.status}</td>
-                  <td>
-                    <div className="inline-actions">
-                      <select
-                        value={order.status}
-                        onChange={(event) => updateOrderStatus(order.id, event.target.value)}
-                      >
-                        <option value="new">Neu</option>
-                        <option value="scheduled">Geplant</option>
-                        <option value="in_transit">In Fahrt</option>
-                        <option value="completed">Abgeschlossen</option>
-                      </select>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </div>
-  );
+function signToken(user) {
+  return jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
 }
 
-export default App;
+function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
 
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+
+  const token = authHeader.replace('Bearer ', '');
+
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = payload;
+    next();
+  } catch (error) {
+    return res.status(401).json({ message: 'Invalid token' });
+  }
+}
+
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, name: 'LogiX API', timestamp: new Date().toISOString() });
+});
+
+app.post('/api/auth/register', async (req, res) => {
+  const { name, email, password, role = 'dispatcher' } = req.body || {};
+
+  if (!name || !email || !password) {
+    return res.status(400).json({ message: 'name, email and password are required' });
+  }
+
+  const existingUser = await get('SELECT id FROM users WHERE email = ?', [email]);
+  if (existingUser) {
+    return res.status(409).json({ message: 'Email already in use' });
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const userResult = await run(
+    'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)',
+    [name, email, passwordHash, role]
+  );
+
+  const user = await get('SELECT id, name, email, role FROM users WHERE id = ?', [userResult.lastID]);
+  const token = signToken(user);
+
+  return res.status(201).json({ token, user });
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body || {};
+
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Email and password are required' });
+  }
+
+  const user = await get('SELECT id, name, email, password_hash, role FROM users WHERE email = ?', [email]);
+  if (!user) {
+    return res.status(401).json({ message: 'Invalid credentials' });
+  }
+
+  const passwordMatches = await bcrypt.compare(password, user.password_hash);
+  if (!passwordMatches) {
+    return res.status(401).json({ message: 'Invalid credentials' });
+  }
+
+  const safeUser = { id: user.id, name: user.name, email: user.email, role: user.role };
+  const token = signToken(safeUser);
+
+  return res.json({ token, user: safeUser });
+});
+
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  const user = await get('SELECT id, name, email, role FROM users WHERE id = ?', [req.user.userId]);
+  return res.json({ user });
+});
+
+app.get('/api/customers', requireAuth, async (_req, res) => {
+  const customers = await all('SELECT * FROM customers ORDER BY id DESC');
+  res.json(customers);
+});
+
+app.post('/api/customers', requireAuth, async (req, res) => {
+  const { name, contact_person, phone, email } = req.body || {};
+
+  if (!name) {
+    return res.status(400).json({ message: 'Customer name is required' });
+  }
+
+  const result = await run(
+    'INSERT INTO customers (name, contact_person, phone, email) VALUES (?, ?, ?, ?)',
+    [name, contact_person || '', phone || '', email || '']
+  );
+
+  const customer = await get('SELECT * FROM customers WHERE id = ?', [result.lastID]);
+  res.status(201).json(customer);
+});
+
+app.get('/api/drivers', requireAuth, async (_req, res) => {
+  const drivers = await all('SELECT * FROM drivers ORDER BY id ASC');
+  res.json(drivers);
+});
+
+app.post('/api/drivers', requireAuth, async (req, res) => {
+  const { name, phone, license, status = 'available' } = req.body || {};
+
+  if (!name) {
+    return res.status(400).json({ message: 'Driver name is required' });
+  }
+
+  const result = await run(
+    'INSERT INTO drivers (name, phone, license, status) VALUES (?, ?, ?, ?)',
+    [name, phone || '', license || '', status]
+  );
+
+  const driver = await get('SELECT * FROM drivers WHERE id = ?', [result.lastID]);
+  res.status(201).json(driver);
+});
+
+app.get('/api/vehicles', requireAuth, async (_req, res) => {
+  const vehicles = await all(
+    `SELECT v.*, d.name AS driver_name
+     FROM vehicles v
+     LEFT JOIN drivers d ON d.id = v.driver_id
+     ORDER BY v.id ASC`
+  );
+  res.json(vehicles);
+});
+
+app.post('/api/vehicles', requireAuth, async (req, res) => {
+  const { name, plate, type, capacity_weight, capacity_volume, driver_id, is_active = 1 } = req.body || {};
+
+  if (!name || !plate || !type) {
+    return res.status(400).json({ message: 'Vehicle name, plate and type are required' });
+  }
+
+  const result = await run(
+    'INSERT INTO vehicles (name, plate, type, capacity_weight, capacity_volume, driver_id, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [name, plate, type, Number(capacity_weight || 0), Number(capacity_volume || 0), driver_id || null, is_active ? 1 : 0]
+  );
+
+  const vehicle = await get('SELECT * FROM vehicles WHERE id = ?', [result.lastID]);
+  res.status(201).json(vehicle);
+});
+
+app.get('/api/orders', requireAuth, async (_req, res) => {
+  const orders = await all(`
+    SELECT o.*, c.name AS customer_name
+    FROM orders o
+    LEFT JOIN customers c ON c.id = o.customer_id
+    ORDER BY o.order_date DESC, o.id DESC
+  `);
+  res.json(orders);
+});
+
+app.post('/api/orders', requireAuth, async (req, res) => {
+  const {
+    customer_id,
+    title,
+    order_date,
+    pickup_address,
+    delivery_address,
+    pickup_lat,
+    pickup_lng,
+    delivery_lat,
+    delivery_lng,
+    pickup_time,
+    delivery_time,
+    weight,
+    volume,
+    priority = 'normal',
+    status = 'new',
+    notes = ''
+  } = req.body || {};
+
+  if (!title || !order_date) {
+    return res.status(400).json({ message: 'Title and order date are required' });
+  }
+
+  const result = await run(
+    `INSERT INTO orders (
+      customer_id,
+      title,
+      order_date,
+      pickup_address,
+      delivery_address,
+      pickup_lat,
+      pickup_lng,
+      delivery_lat,
+      delivery_lng,
+      pickup_time,
+      delivery_time,
+      weight,
+      volume,
+      priority,
+      status,
+      notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      customer_id || null,
+      title,
+      order_date,
+      pickup_address || '',
+      delivery_address || '',
+      pickup_lat ?? null,
+      pickup_lng ?? null,
+      delivery_lat ?? null,
+      delivery_lng ?? null,
+      pickup_time || '',
+      delivery_time || '',
+      Number(weight || 0),
+      Number(volume || 0),
+      priority,
+      status,
+      notes
+    ]
+  );
+
+  const order = await get(`
+    SELECT o.*, c.name AS customer_name
+    FROM orders o
+    LEFT JOIN customers c ON c.id = o.customer_id
+    WHERE o.id = ?
+  `, [result.lastID]);
+
+  res.status(201).json(order);
+});
+
+app.patch('/api/orders/:id/status', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body || {};
+
+  if (!status) {
+    return res.status(400).json({ message: 'Status is required' });
+  }
+
+  const existingOrder = await get('SELECT id FROM orders WHERE id = ?', [id]);
+  if (!existingOrder) {
+    return res.status(404).json({ message: 'Order not found' });
+  }
+
+  await run('UPDATE orders SET status = ? WHERE id = ?', [status, id]);
+
+  const order = await get(`
+    SELECT o.*, c.name AS customer_name
+    FROM orders o
+    LEFT JOIN customers c ON c.id = o.customer_id
+    WHERE o.id = ?
+  `, [id]);
+
+  return res.json(order);
+});
+
+app.get('/api/tours', requireAuth, async (_req, res) => {
+  const tours = await all(`
+    SELECT t.*, v.name AS vehicle_name, d.name AS driver_name
+    FROM tours t
+    LEFT JOIN vehicles v ON v.id = t.vehicle_id
+    LEFT JOIN drivers d ON d.id = t.driver_id
+    ORDER BY t.tour_date DESC, t.id DESC
+  `);
+
+  const detailedTours = [];
+
+  for (const tour of tours) {
+    const stops = await all(
+      `SELECT ts.*, o.title AS order_title, o.delivery_address, o.pickup_address
+       FROM tour_stops ts
+       LEFT JOIN orders o ON o.id = ts.order_id
+       WHERE ts.tour_id = ?
+       ORDER BY ts.sequence ASC`,
+      [tour.id]
+    );
+
+    detailedTours.push({ ...tour, stops });
+  }
+
+  res.json(detailedTours);
+});
+
+app.post('/api/tours/plan', requireAuth, async (req, res) => {
+  const { date } = req.body || {};
+  const planDate = date || new Date().toISOString().slice(0, 10);
+
+  const vehicles = await all('SELECT * FROM vehicles WHERE is_active = 1 ORDER BY id ASC');
+  const orders = await all(
+    `SELECT * FROM orders
+     WHERE order_date = ? AND status != 'completed'
+     ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 WHEN 'low' THEN 2 ELSE 3 END, pickup_time ASC`,
+    [planDate]
+  );
+
+  await run('DELETE FROM tour_stops WHERE tour_id IN (SELECT id FROM tours WHERE tour_date = ?)', [planDate]);
+  await run('DELETE FROM tours WHERE tour_date = ?', [planDate]);
+
+  const tourAssignments = vehicles.map((vehicle) => ({
+    vehicle_id: vehicle.id,
+    driver_id: vehicle.driver_id,
+    date: planDate,
+    status: 'planned',
+    notes: `Planned automatically for ${vehicle.name}`,
+    stops: []
+  }));
+
+  for (const order of orders) {
+    const matchingVehicle = vehicles.find(
+      (vehicle) => Number(vehicle.capacity_weight) >= Number(order.weight) && Number(vehicle.capacity_volume) >= Number(order.volume)
+    );
+
+    if (!matchingVehicle) {
+      continue;
+    }
+
+    const assignment = tourAssignments.find((item) => item.vehicle_id === matchingVehicle.id);
+    if (assignment) {
+      assignment.stops.push({
+        order_id: order.id,
+        stop_type: 'delivery',
+        address: order.delivery_address || 'Unspecified stop',
+        lat: order.delivery_lat,
+        lng: order.delivery_lng,
+        title: order.title
+      });
+    }
+  }
+
+  const createdTours = [];
+
+  for (const assignment of tourAssignments) {
+    if (assignment.stops.length === 0) {
+      continue;
+    }
+
+    const tourResult = await run(
+      'INSERT INTO tours (vehicle_id, driver_id, tour_date, status, notes) VALUES (?, ?, ?, ?, ?)',
+      [assignment.vehicle_id, assignment.driver_id, assignment.date, assignment.status, assignment.notes]
+    );
+
+    for (let index = 0; index < assignment.stops.length; index += 1) {
+      const stop = assignment.stops[index];
+      await run(
+        'INSERT INTO tour_stops (tour_id, order_id, sequence, stop_type, address, lat, lng) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [tourResult.lastID, stop.order_id, index + 1, stop.stop_type, stop.address, stop.lat, stop.lng]
+      );
+    }
+
+    createdTours.push({
+      id: tourResult.lastID,
+      vehicle_id: assignment.vehicle_id,
+      driver_id: assignment.driver_id,
+      tour_date: assignment.date,
+      status: assignment.status,
+      stops: assignment.stops
+    });
+  }
+
+  return res.json({ date: planDate, tours: createdTours });
+});
+
+app.get('/api/dashboard', requireAuth, async (_req, res) => {
+  const [orders, vehicles, drivers, tours] = await Promise.all([
+    all('SELECT COUNT(*) AS count FROM orders'),
+    all('SELECT COUNT(*) AS count FROM vehicles WHERE is_active = 1'),
+    all('SELECT COUNT(*) AS count FROM drivers'),
+    all('SELECT COUNT(*) AS count FROM tours')
+  ]);
+
+  const readyOrders = await all(`
+    SELECT o.*, c.name AS customer_name
+    FROM orders o
+    LEFT JOIN customers c ON c.id = o.customer_id
+    WHERE o.status != 'completed'
+    ORDER BY o.order_date DESC
+    LIMIT 5
+  `);
+
+  res.json({
+    summary: {
+      orders: Number(orders[0]?.count || 0),
+      vehicles: Number(vehicles[0]?.count || 0),
+      drivers: Number(drivers[0]?.count || 0),
+      tours: Number(tours[0]?.count || 0)
+    },
+    recent_orders: readyOrders
+  });
+});
+
+async function startServer() {
+  await initializeDatabase();
+  await seedDatabase();
+
+  app.listen(PORT, () => {
+    console.log(`LogiX API running on http://localhost:${PORT}`);
+  });
+}
+
+startServer().catch((error) => {
+  console.error('Failed to start server:', error);
+  process.exit(1);
+});
